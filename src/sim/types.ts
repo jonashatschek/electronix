@@ -4,7 +4,7 @@ export interface GridPoint {
   y: number;
 }
 
-export type PartKind = 'battery' | 'resistor' | 'bulb' | 'switch';
+export type PartKind = 'battery' | 'resistor' | 'bulb' | 'switch' | 'led' | 'diode' | 'capacitor' | 'npn';
 
 /** 0 = pointing right, 1 = down, 2 = left, 3 = up (pin0 → pin1 direction). */
 export type Rotation = 0 | 1 | 2 | 3;
@@ -17,7 +17,7 @@ export interface Part {
   x: number;
   y: number;
   rot: Rotation;
-  /** Volts for a battery, ohms for a resistor; unused for bulb/switch. */
+  /** Volts (battery), ohms (resistor), farads (capacitor), color index (LED). */
   value: number;
   closed?: boolean;
   burnt?: boolean;
@@ -62,6 +62,10 @@ export interface ElementReading {
   /** Power absorbed (positive) — for a battery, power delivered. */
   power: number;
   status: PartStatus;
+  /** Voltage at each pin. */
+  pinVoltages: number[];
+  /** Current flowing INTO the part at each pin. */
+  pinCurrents: number[];
   /** Bulbs only: 0..1 */
   brightness?: number;
 }
@@ -75,4 +79,6 @@ export interface SimResult {
   notes: Note[];
   /** Parts that burned out during THIS simulation. The caller should persist `burnt: true`. */
   newlyBurnt: string[];
+  /** Time-step state to pass into the next step (capacitor voltages, heat, solver warm start). */
+  state: Map<string, number>;
 }

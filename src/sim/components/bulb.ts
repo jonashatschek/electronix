@@ -1,5 +1,5 @@
 import { fmt } from '../format';
-import { NO_CURRENT, OPEN_G, type ComponentDef } from './types';
+import { NO_CURRENT, OPEN_G, twoTerminal, type ComponentDef } from './types';
 
 export const BULB_VOLTS = 6;
 export const BULB_AMPS = 0.15;
@@ -10,23 +10,23 @@ export const bulb: ComponentDef = {
   kind: 'bulb',
   name: 'Bulb',
   prefix: 'L',
+  key: 'l',
   blurb:
     `A filament bulb glows because current heats a very thin wire until it's white-hot. This one is rated ${BULB_VOLTS} V / ${Math.round(BULB_AMPS * 1000)} mA. ` +
     'Too little current and it stays dark. Too much and the filament melts, leaving a gap: it has burned out.',
   defaultValue: 0,
   formatValue: () => `${BULB_VOLTS} V`,
 
-  companion(part) {
-    return { G: part.burnt ? OPEN_G : 1 / BULB_OHMS, J: 0 };
-  },
+  ...twoTerminal((part) => ({ G: part.burnt ? OPEN_G : 1 / BULB_OHMS, J: 0 })),
 
-  evaluate(part, { current, voltage }) {
+  evaluate(part, { current, voltage }, ctx) {
     const power = current * voltage;
     if (part.burnt) return { status: 'burnt', power: 0, brightness: 0, notes: [] };
     const ratio = power / BULB_WATTS;
+    const heatRatio = ctx.smooth(`${part.id}:heat`, power, 0.1) / BULB_WATTS;
     const brightness = Math.min(1, Math.sqrt(Math.max(0, ratio)));
 
-    if (ratio > 1.8) {
+    if (heatRatio > 1.8) {
       return {
         status: 'burnt',
         power,

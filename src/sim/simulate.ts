@@ -1,7 +1,9 @@
-import { COMPONENTS, NO_CURRENT, type Companion, type PartEval } from './components';
+import { COMPONENTS, NO_CURRENT, type Measured, type PartEval, type SimCtx } from './components';
+import { pnjlim } from './components/junction';
 import { fmt } from './format';
-import { partPins, pointKey } from './geometry';
+import { pointKey } from './geometry';
 import { LinearSystem } from './mna';
+import { partPins } from './pins';
 import type { Circuit, ElementReading, Note, Part, SimResult } from './types';
 
 /** Wires are modelled as tiny resistors so we can read the current in each one. */
@@ -11,13 +13,13 @@ export const GMIN = 1e-9;
 
 interface Element {
   id: string;
-  a: number;
-  b: number;
+  nodes: number[];
   part?: Part;
 }
 
 interface Topology {
   nodeOf: Map<string, number>;
+  keys: string[];
   n: number;
   elements: Element[];
   degree: Map<string, number>;
@@ -38,93 +40,201 @@ export function buildTopology(c: Circuit): Topology {
   const firstBattery = c.parts.find((p) => p.kind === 'battery');
   const groundKey = firstBattery ? pointKey(partPins(firstBattery)[1]) : null;
   const nodeOf = new Map<string, number>();
-  let n = 0;
-  for (const k of degree.keys()) nodeOf.set(k, k === groundKey ? -1 : n++);
+  const keys: string[] = [];
+  for (const k of degree.keys()) {
+    if (k === groundKey) nodeOf.set(k, -1);
+    else {
+      nodeOf.set(k, keys.length);
+      keys.push(k);
+    }
+  }
 
   const elements: Element[] = [
-    ...wires.map((w) => ({ id: w.id, a: nodeOf.get(pointKey(w.a))!, b: nodeOf.get(pointKey(w.b))! })),
-    ...c.parts.map((p) => {
-      const [pa, pb] = partPins(p);
-      return { id: p.id, a: nodeOf.get(pointKey(pa))!, b: nodeOf.get(pointKey(pb))!, part: p };
-    }),
+    ...wires.map((w) => ({ id: w.id, nodes: [nodeOf.get(pointKey(w.a))!, nodeOf.get(pointKey(w.b))!] })),
+    ...c.parts.map((p) => ({ id: p.id, nodes: partPins(p).map((pt) => nodeOf.get(pointKey(pt))!), part: p })),
   ];
-  return { nodeOf, n, elements, degree, hasBattery: !!firstBattery };
+  return { nodeOf, keys, n: keys.length, elements, degree, hasBattery: !!firstBattery };
 }
 
 function effective(part: Part, burnt: Set<string>): Part {
   return burnt.has(part.id) && !part.burnt ? { ...part, burnt: true } : part;
 }
 
-function companionOf(el: Element, vab: number, burnt: Set<string>): Companion {
-  if (!el.part) return { G: 1 / R_WIRE, J: 0 };
-  const part = effective(el.part, burnt);
-  return COMPONENTS[part.kind].companion(part, vab);
+function makeCtx(dt: number | null, prev: ReadonlyMap<string, number>, next: Map<string, number>): SimCtx & { limited: boolean } {
+  const memory = new Map<string, number>();
+  return {
+    limited: false,
+    dt,
+    prev,
+    next,
+    limit: true,
+    junction(key, vNew, vt, is) {
+      if (!this.limit) return vNew;
+      const v = pnjlim(vNew, memory.get(key) ?? prev.get(`j:${key}`) ?? 0, vt, is);
+      if (Math.abs(v - vNew) > 1e-9) this.limited = true;
+      memory.set(key, v);
+      next.set(`j:${key}`, v);
+      return v;
+    },
+    smooth(key, value, tau) {
+      if (dt === null) return value;
+      const p = prev.get(`s:${key}`) ?? 0;
+      const v = p + (value - p) * Math.min(1, dt / tau);
+      next.set(`s:${key}`, v);
+      return v;
+    },
+  };
 }
 
-/** Newton-Raphson around the MNA solve. Linear circuits converge on the second pass. */
-function solve(topo: Topology, burnt: Set<string>): Float64Array {
+/**
+ * One Newton-Raphson solve. `anchorG` adds a conductance from every node to its
+ * `anchor` voltage (pseudo-transient continuation, see `solve`). 0 = the real circuit.
+ */
+function newton(
+  topo: Topology,
+  burnt: Set<string>,
+  ctx: SimCtx & { limited: boolean },
+  start: Float64Array,
+  anchorG = 0,
+  anchor?: Float64Array,
+): { v: Float64Array; converged: boolean } {
   const { n, elements } = topo;
-  let v = new Float64Array(n);
-  if (!topo.hasBattery) return v;
+  let v = Float64Array.from(start);
   const V = (i: number) => (i < 0 ? 0 : v[i]);
 
   for (let iter = 0; iter < 100; iter++) {
+    ctx.limited = false;
     const sys = new LinearSystem(n);
-    for (let i = 0; i < n; i++) sys.addConductance(i, -1, GMIN);
+    for (let i = 0; i < n; i++) {
+      sys.addConductance(i, -1, GMIN + anchorG);
+      if (anchorG) sys.addCurrent(i, anchorG * anchor![i]);
+    }
     for (const el of elements) {
-      const c = companionOf(el, V(el.a) - V(el.b), burnt);
-      sys.addConductance(el.a, el.b, c.G);
-      sys.addCurrent(el.a, c.J);
-      sys.addCurrent(el.b, -c.J);
+      const nodes = el.nodes;
+      if (!el.part) {
+        sys.addConductance(nodes[0], nodes[1], 1 / R_WIRE);
+        continue;
+      }
+      const part = effective(el.part, burnt);
+      COMPONENTS[part.kind].stamp(part, nodes.map(V), ctx, {
+        current(pin, ieq, dI) {
+          const row = nodes[pin];
+          if (row < 0) return;
+          for (let j = 0; j < nodes.length; j++) if (nodes[j] >= 0) sys.A[row * n + nodes[j]] += dI[j];
+          sys.b[row] -= ieq;
+        },
+      });
     }
     const x = sys.solve();
     if (!x) break;
     let delta = 0;
     for (let i = 0; i < n; i++) delta = Math.max(delta, Math.abs(x[i] - v[i]));
     v = x;
-    if (delta < 1e-7) break;
+    // Converged when nothing moves AND no junction voltage had to be held back this pass.
+    if (delta < 1e-6 && !ctx.limited && iter > 0) return { v, converged: true };
   }
-  return v;
+  return { v, converged: false };
 }
 
-interface Measurement {
-  current: number;
-  voltage: number;
+/**
+ * Solve the circuit. Plain Newton almost always works. When it doesn't (at the instant a
+ * circuit with positive feedback, like a blinker, flips state, the solution jumps), we use
+ * pseudo-transient continuation: tie every node to its last value with a strong conductance,
+ * then relax that tie step by step so the solution slides smoothly to the real answer.
+ */
+function solve(topo: Topology, burnt: Set<string>, ctx: SimCtx & { limited: boolean }): { v: Float64Array; converged: boolean } {
+  const n = topo.n;
+  if (!topo.hasBattery) return { v: new Float64Array(n), converged: true };
+  // Warm start from the previous time step's node voltages.
+  const start = Float64Array.from(topo.keys, (k) => ctx.prev.get(`n:${k}`) ?? 0);
+  const first = newton(topo, burnt, ctx, start);
+  if (first.converged) return first;
+
+  let anchor = start;
+  let g = 10;
+  for (let step = 0; step < 400 && g > 1e-7; step++) {
+    const r = newton(topo, burnt, ctx, anchor, g, anchor);
+    if (!r.converged) {
+      g *= 10; // too big a stride: hold on tighter
+      if (g > 1e6) break;
+      continue;
+    }
+    let moved = 0;
+    for (let i = 0; i < n; i++) moved = Math.max(moved, Math.abs(r.v[i] - anchor[i]));
+    anchor = r.v;
+    if (moved < 1e-3) g /= 4; // settled at this tie strength: loosen it
+  }
+  return newton(topo, burnt, ctx, anchor);
 }
 
-function measure(topo: Topology, v: Float64Array, burnt: Set<string>): Map<string, Measurement> {
+function measure(topo: Topology, v: Float64Array, burnt: Set<string>, ctx: SimCtx): Map<string, Measured> {
   const V = (i: number) => (i < 0 ? 0 : v[i]);
-  const out = new Map<string, Measurement>();
+  const exact = { ...ctx, limit: false };
+  const out = new Map<string, Measured>();
   for (const el of topo.elements) {
-    const vab = V(el.a) - V(el.b);
-    const c = companionOf(el, vab, burnt);
-    out.set(el.id, { current: c.G * vab - c.J, voltage: vab });
+    const pv = el.nodes.map(V);
+    if (!el.part) {
+      const i = (pv[0] - pv[1]) / R_WIRE;
+      out.set(el.id, { v: pv, i: [i, -i], current: i, voltage: pv[0] - pv[1] });
+      continue;
+    }
+    const part = effective(el.part, burnt);
+    const pi = COMPONENTS[part.kind].currents(part, pv, exact);
+    out.set(
+      el.id,
+      part.kind === 'npn'
+        ? { v: pv, i: pi, current: pi[1], voltage: pv[1] - pv[2] }
+        : { v: pv, i: pi, current: pi[0], voltage: pv[0] - pv[1] },
+    );
   }
   return out;
 }
 
-function evaluateParts(c: Circuit, m: Map<string, Measurement>, burnt: Set<string>): Map<string, PartEval> {
+function evaluateParts(c: Circuit, m: Map<string, Measured>, burnt: Set<string>, ctx: SimCtx): Map<string, PartEval> {
   const out = new Map<string, PartEval>();
-  for (const p of c.parts) {
-    const part = effective(p, burnt);
-    out.set(p.id, COMPONENTS[p.kind].evaluate(part, m.get(p.id)!));
-  }
+  for (const p of c.parts) out.set(p.id, COMPONENTS[p.kind].evaluate(effective(p, burnt), m.get(p.id)!, ctx));
   return out;
+}
+
+export interface SimOptions {
+  /** Time step in seconds. Omit for a steady-state (DC) solve, where capacitors act as open gaps. */
+  dt?: number;
+  /** State returned by the previous step's SimResult. */
+  state?: ReadonlyMap<string, number>;
+  /** Internal: how many times this step has been halved. */
+  depth?: number;
 }
 
 const SEVERITY_ORDER = { error: 0, warn: 1, success: 2, info: 3 } as const;
 
-export function simulate(circuit: Circuit): SimResult {
+export function simulate(circuit: Circuit, opts: SimOptions = {}): SimResult {
   const topo = buildTopology(circuit);
+  const dt = opts.dt ?? null;
+  const prev = opts.state ?? new Map<string, number>();
   const burnt = new Set(circuit.parts.filter((p) => p.burnt).map((p) => p.id));
   const newlyBurnt: string[] = [];
   const burnNotes: Note[] = [];
 
   // Solve, check whether anything burns, mark it open, and re-solve. One failure can cascade.
-  let v = solve(topo, burnt);
-  let m = measure(topo, v, burnt);
-  let evals = evaluateParts(circuit, m, burnt);
+  let ctx = makeCtx(dt, prev, new Map());
+  let { v, converged } = solve(topo, burnt, ctx);
+
+  // Newton failed (typically at a sudden switching edge): retry as two half steps.
+  const depth = opts.depth ?? 0;
+  if (!converged && dt !== null && depth < 4) {
+    const first = simulate(circuit, { dt: dt / 2, state: prev, depth: depth + 1 });
+    const c2 = first.newlyBurnt.length
+      ? { ...circuit, parts: circuit.parts.map((p) => (first.newlyBurnt.includes(p.id) ? { ...p, burnt: true } : p)) }
+      : circuit;
+    const second = simulate(c2, { dt: dt / 2, state: first.state, depth: depth + 1 });
+    return { ...second, newlyBurnt: [...first.newlyBurnt, ...second.newlyBurnt], notes: first.newlyBurnt.length ? first.notes : second.notes };
+  }
+
+  let m = measure(topo, v, burnt, ctx);
+  let evals = evaluateParts(circuit, m, burnt, ctx);
   for (let round = 0; round < 10; round++) {
+    // Never destroy a part based on a solution that didn't converge.
+    if (!converged) break;
     const fresh = circuit.parts.filter((p) => !burnt.has(p.id) && evals.get(p.id)!.burns);
     if (!fresh.length) break;
     for (const p of fresh) {
@@ -132,20 +242,48 @@ export function simulate(circuit: Circuit): SimResult {
       newlyBurnt.push(p.id);
       burnNotes.push(...evals.get(p.id)!.notes);
     }
-    v = solve(topo, burnt);
-    m = measure(topo, v, burnt);
-    evals = evaluateParts(circuit, m, burnt);
+    ctx = makeCtx(dt, prev, new Map());
+    ({ v, converged } = solve(topo, burnt, ctx));
+    m = measure(topo, v, burnt, ctx);
+    evals = evaluateParts(circuit, m, burnt, ctx);
   }
 
-  // Readings
+  // Carry solver state forward: node voltages (warm start) and junction voltages.
+  const state = ctx.next;
+  if (!converged) {
+    // Don't let garbage from a failed solve heat anything up: keep last step's averages.
+    for (const [k, val] of prev) if (k.startsWith('s:')) state.set(k, val);
+  }
+  topo.keys.forEach((k, i) => state.set(`n:${k}`, v[i]));
+
   const readings = new Map<string, ElementReading>();
   for (const w of circuit.wires) {
-    const r = m.get(w.id) ?? { current: 0, voltage: 0 };
-    readings.set(w.id, { id: w.id, ...r, power: r.current * r.voltage, status: Math.abs(r.current) > NO_CURRENT ? 'ok' : 'dead' });
+    const r = m.get(w.id);
+    const current = r?.current ?? 0;
+    const voltage = r?.voltage ?? 0;
+    readings.set(w.id, {
+      id: w.id,
+      current,
+      voltage,
+      power: current * voltage,
+      status: Math.abs(current) > NO_CURRENT ? 'ok' : 'dead',
+      pinVoltages: r?.v ?? [0, 0],
+      pinCurrents: r?.i ?? [0, 0],
+    });
   }
   for (const p of circuit.parts) {
     const e = evals.get(p.id)!;
-    readings.set(p.id, { id: p.id, ...m.get(p.id)!, power: e.power, status: e.status, brightness: e.brightness });
+    const r = m.get(p.id)!;
+    readings.set(p.id, {
+      id: p.id,
+      current: r.current,
+      voltage: r.voltage,
+      power: e.power,
+      status: e.status,
+      brightness: e.brightness,
+      pinVoltages: r.v,
+      pinCurrents: r.i,
+    });
   }
 
   const nodeVoltage = new Map<string, number>();
@@ -154,8 +292,13 @@ export function simulate(circuit: Circuit): SimResult {
   const notes = [...burnNotes, ...circuitNotes(circuit, readings, evals, burnt, newlyBurnt, topo.degree)];
   notes.sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity]);
 
-  return { nodeVoltage, pointDegree: topo.degree, readings, notes, newlyBurnt };
+  return { nodeVoltage, pointDegree: topo.degree, readings, notes, newlyBurnt, state };
 }
+
+/** True when the circuit contains parts that change over time (needs the clock running). */
+export const isDynamic = (c: Circuit) => c.parts.some((p) => COMPONENTS[p.kind].dynamic);
+
+const LIGHTS = new Set(['bulb', 'led']);
 
 /** Human explanations of what the circuit is doing: the "teacher" part of the game. */
 function circuitNotes(
@@ -176,7 +319,7 @@ function circuitNotes(
 
   for (const p of c.parts) {
     if (p.burnt && !newlyBurnt.includes(p.id)) {
-      notes.push({ severity: 'info', partId: p.id, title: `${p.label} is burnt out`, text: 'Select it and press Replace once you\'ve fixed what killed it.' });
+      notes.push({ severity: 'info', partId: p.id, title: `${p.label} is burnt out`, text: "Select it and press Replace once you've fixed what killed it." });
     }
   }
 
@@ -190,6 +333,7 @@ function circuitNotes(
   if (!delivering.length) {
     const openSwitch = c.parts.find((p) => p.kind === 'switch' && !p.closed);
     const dangling = c.parts.flatMap((p) => partPins(p)).filter((pt) => degree.get(pointKey(pt)) === 1).length;
+    const hasCap = c.parts.some((p) => p.kind === 'capacitor' && !p.burnt);
     if (newlyBurnt.length) {
       // the burn note already explains it
     } else if (openSwitch) {
@@ -201,6 +345,12 @@ function circuitNotes(
       });
     } else if (burnt.size) {
       notes.push({ severity: 'warn', title: 'A burnt part breaks the loop', text: 'Burnt parts are open gaps. Replace them or route around them.' });
+    } else if (hasCap && !dangling) {
+      notes.push({
+        severity: 'info',
+        title: 'Battery current has stopped',
+        text: 'Any capacitor in the loop is now fully charged, so no more current flows from the battery. A capacitor blocks steady DC: current only flows while its voltage is changing.',
+      });
     } else {
       notes.push({
         severity: 'warn',
@@ -228,7 +378,7 @@ function circuitNotes(
   if (!notes.some((n) => n.severity === 'error' || n.severity === 'warn')) {
     const b = delivering[0];
     const r = readings.get(b.id)!;
-    const lit = c.parts.filter((p) => p.kind === 'bulb' && (readings.get(p.id)!.brightness ?? 0) > 0.17).map((p) => p.label);
+    const lit = c.parts.filter((p) => LIGHTS.has(p.kind) && (readings.get(p.id)!.brightness ?? 0) > 0.17).map((p) => p.label);
     notes.push({
       severity: 'success',
       title: lit.length ? `${lit.join(', ')} ${lit.length > 1 ? 'are' : 'is'} lit!` : 'Current is flowing',

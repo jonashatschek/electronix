@@ -1,5 +1,5 @@
 import { fmt } from '../format';
-import { NO_CURRENT, OPEN_G, type ComponentDef } from './types';
+import { NO_CURRENT, OPEN_G, twoTerminal, type ComponentDef } from './types';
 
 export const RESISTOR_WATTS = 0.25;
 
@@ -7,6 +7,7 @@ export const resistor: ComponentDef = {
   kind: 'resistor',
   name: 'Resistor',
   prefix: 'R',
+  key: 'r',
   blurb:
     "A resistor limits current. Ohm's law: I = V ÷ R, so more resistance means less current. " +
     'The energy it absorbs turns into heat. The colored bands encode its value, and its watt rating (¼ W here) is how much heat it survives.',
@@ -15,14 +16,14 @@ export const resistor: ComponentDef = {
   unit: 'Ω',
   formatValue: (p) => fmt(p.value, 'Ω'),
 
-  companion(part) {
-    return { G: part.burnt ? OPEN_G : 1 / part.value, J: 0 };
-  },
+  ...twoTerminal((part) => ({ G: part.burnt ? OPEN_G : 1 / part.value, J: 0 })),
 
-  evaluate(part, { current, voltage }) {
+  evaluate(part, { current, voltage }, ctx) {
     const power = current * voltage;
     if (part.burnt) return { status: 'burnt', power: 0, notes: [] };
-    const ratio = power / RESISTOR_WATTS;
+    // Resistors take a moment to heat up, so short spikes are survivable.
+    const heat = ctx.smooth(`${part.id}:heat`, power, 1);
+    const ratio = heat / RESISTOR_WATTS;
 
     if (ratio > 2) {
       return {
