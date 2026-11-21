@@ -1,3 +1,4 @@
+import { Fragment } from 'react';
 import { COMPONENTS } from '../sim/components';
 import { fmt } from '../sim/format';
 import { pointKey } from '../sim/geometry';
@@ -27,7 +28,7 @@ export function Inspector() {
       <section className="panel inspector">
         <h2>Getting started</h2>
         <ol className="tips">
-          <li>Pick a part (B, R, L, S) and click the board to place it. Press T to rotate it.</li>
+          <li>Pick a part from the left (or press its key) and click the board to place it. Press T to rotate it.</li>
           <li>
             Press <kbd>W</kbd> and click from pin to pin to draw wires. Wires connect <em>only at their ends</em>.
           </li>
@@ -77,7 +78,7 @@ export function Inspector() {
           <select value={part.value} onChange={(e) => setValue(part.id, Number(e.target.value))}>
             {def.valueOptions.map((v) => (
               <option key={v} value={v}>
-                {fmt(v, def.unit ?? '')}
+                {def.optionLabel ? def.optionLabel(v) : fmt(v, def.unit ?? '')}
               </option>
             ))}
           </select>
@@ -85,12 +86,22 @@ export function Inspector() {
       )}
 
       <dl className="readings">
-        <dt>Voltage across</dt>
-        <dd>{fmt(V, 'V')}</dd>
-        <dt>Current through</dt>
-        <dd>{fmt(I, 'A')}</dd>
+        {part.kind !== 'npn' && (
+          <>
+            <dt>Voltage across</dt>
+            <dd>{fmt(V, 'V')}</dd>
+            <dt>Current through</dt>
+            <dd>{fmt(I, 'A')}</dd>
+          </>
+        )}
         <dt>{part.kind === 'battery' ? 'Power delivered' : 'Power (heat/light)'}</dt>
         <dd>{fmt(Math.abs(r.power), 'W')}</dd>
+        {def.extraReadings?.(part, { v: r.pinVoltages, i: r.pinCurrents, current: r.current, voltage: r.voltage }).map(([k, val]) => (
+          <Fragment key={k}>
+            <dt>{k}</dt>
+            <dd>{val}</dd>
+          </Fragment>
+        ))}
       </dl>
 
       {part.kind === 'resistor' && I > 1e-6 && (

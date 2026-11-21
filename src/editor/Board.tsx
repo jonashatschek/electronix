@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 import { COMPONENTS, NO_CURRENT } from '../sim/components';
-import { partPins, pointKey, samePoint } from '../sim/geometry';
+import { pointKey, samePoint } from '../sim/geometry';
+import { partHub, partPins } from '../sim/pins';
 import type { Circuit, GridPoint, Part, Wire } from '../sim/types';
 import { COLS, G, ROWS } from './constants';
 import { FlowLayer, type Segment } from './FlowLayer';
@@ -113,8 +114,18 @@ export function Board() {
       current: sim.readings.get(w.id)?.current ?? 0,
     }));
     for (const p of circuit.parts) {
-      const [a, b] = partPins(p);
-      segs.push({ id: p.id, x1: a.x * G, y1: a.y * G, x2: b.x * G, y2: b.y * G, current: sim.readings.get(p.id)?.current ?? 0 });
+      const pins = partPins(p);
+      const r = sim.readings.get(p.id);
+      const hub = partHub(p);
+      if (!hub) {
+        const [a, b] = pins;
+        segs.push({ id: p.id, x1: a.x * G, y1: a.y * G, x2: b.x * G, y2: b.y * G, current: r?.current ?? 0 });
+      } else {
+        // 3+ pins: each pin's current flows along a line to the hub inside the part.
+        pins.forEach((pin, i) =>
+          segs.push({ id: `${p.id}:${i}`, x1: pin.x * G, y1: pin.y * G, x2: hub.x * G, y2: hub.y * G, current: r?.pinCurrents[i] ?? 0 }),
+        );
+      }
     }
     return segs;
   }, [circuit, sim]);

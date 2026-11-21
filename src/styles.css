@@ -62,7 +62,7 @@ header h1 small { color: var(--muted); font-weight: 400; font-size: 12px; margin
 .logo { color: var(--wire-live); }
 .header-actions { display: flex; gap: 8px; }
 
-main { flex: 1; display: grid; grid-template-columns: 150px 1fr 340px; min-height: 0; }
+main { flex: 1; display: grid; grid-template-columns: 176px 1fr 340px; min-height: 0; }
 
 .toolbar {
   display: flex;
@@ -187,3 +187,34 @@ aside { border-left: 1px solid var(--border); background: var(--panel); overflow
 .probe-red line, .probe-red circle { stroke: #ff4d4d; fill: #ff4d4d; }
 .probe-black line, .probe-black circle { stroke: #ddd; fill: #222; }
 .probe text { font: 700 14px ui-monospace, monospace; fill: var(--text); }
+
+/* ---------- Part buttons with schematic icons ---------- */
+.part-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.toolbar .part-button { flex-direction: column; justify-content: center; gap: 2px; padding: 6px 4px; text-align: center; }
+.part-icon { width: 100%; height: 26px; overflow: hidden; }
+.part-button-name { font-size: 11px; display: flex; align-items: center; gap: 2px; }
+.part-button-name kbd { margin-left: 2px; }
+.part-icon .part { cursor: inherit; }
+.part-icon .lead { stroke-width: 4; }
+.part-icon .plate-long { stroke-width: 4; }
+.part-icon .plate-short { stroke-width: 7; }
+.part-button.active .part-icon .lead,
+.part-button.active .part-icon .plate,
+.part-button.active .part-icon .lever,
+.part-button.active .part-icon .diode-bar,
+.part-button.active .part-icon .cap-curve { stroke: #06121c; }
+
+/* ---------- New part symbols ---------- */
+.part .diode-body { stroke: var(--text); stroke-width: 2; stroke-linejoin: round; }
+.part .diode-plain { fill: var(--text); fill-opacity: 0.85; }
+.part .diode-bar { stroke: var(--text); stroke-width: 3; stroke-linecap: round; }
+.part .led-rays { fill: none; stroke-width: 1.6; stroke-linecap: round; }
+.part .cap-curve { fill: none; stroke: var(--text); stroke-width: 3; stroke-linecap: round; }
+.part .transistor-case { fill: rgba(255, 255, 255, 0.03); stroke: var(--lead); stroke-width: 1.5; }
+.part .emitter-arrow { fill: var(--text); }
+.part.status-burnt .diode-body, .part.status-burnt .transistor-case { fill: #222 !important; stroke: #555; }
+.pin-name { fill: var(--accent); font: 600 10px ui-monospace, monospace; pointer-events: none; opacity: 0.85; }
+
+/* ---------- Clock ---------- */
+.clock { display: flex; align-items: center; gap: 8px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-2); }
+.clock-time { font: 13px ui-monospace, monospace; min-width: 70px; color: var(--wire-live); }

@@ -8,9 +8,11 @@ npm run dev     # http://localhost:5173
 npm test        # simulator unit tests
 ```
 
-**Controls:** V select · W wire · M multimeter · B/R/L/S place battery/resistor/bulb/switch · T rotate · Del delete · Esc cancel · Ctrl+Z undo
+**Controls:** V select · W wire · M multimeter · T rotate · Del delete · Esc cancel · Ctrl+Z undo · Space pause/play the clock
 
-**Code map:** `src/sim/` is the pure-TypeScript circuit solver (Modified Nodal Analysis + Newton-Raphson; one file per component in `src/sim/components/`). `src/editor/` is the React/SVG board. `src/game/` holds examples and, later, levels.
+**Parts:** B battery · R resistor · L bulb · S switch · E LED · D diode · C capacitor · Q NPN transistor
+
+**Code map:** `src/sim/` is the pure-TypeScript circuit solver: Modified Nodal Analysis, Newton-Raphson with SPICE-style junction limiting and pseudo-transient continuation, and backward-Euler time stepping for capacitors. There's one file per component in `src/sim/components/`. `src/editor/` is the React/SVG board. `src/game/` holds examples and, later, levels.
 
 ---
 
@@ -63,7 +65,7 @@ electronix/
 ## Phased milestones
 1. ✅ **Phase 1 – Sandbox MVP:** grid editor, battery/wire/resistor/switch/bulb, linear MNA, current-flow animation, multimeter, short-circuit detection. *Outcome: build circuits and watch them work.*
 2. **Phase 2 – Game layer + World 1–3:** level system, lessons, failure cards, LED/diode via Newton-Raphson, burn effects, Bench Mission checklists.
-3. **Phase 3 – World 4–5:** NPN transistor model, transient simulation, capacitors, time-based animations (blinking LED).
+3. ✅ (sandbox parts done) **Phase 3 – World 4–5:** NPN transistor model, transient simulation, capacitors, time-based animations (blinking LED).
 4. **Phase 4 – World 6–7:** schematic/breadboard view toggle, soldering mission content, inductors, AC source, transformer, rectifier.
 5. **Polish:** sounds, stars/scoring (fewest parts, lowest power), free-play sandbox, optional hosting on GitHub Pages.
 
@@ -71,3 +73,6 @@ electronix/
 - **Sim unit tests (Vitest)**, checked against hand-calculated values: a 9V source with a 1kΩ resistor gives 9mA; a voltage divider gives the expected midpoint; parallel resistors; LED + 330Ω at 5V gives about 9mA; a short circuit is flagged; an NPN switch saturates with the right base current; an RC circuit reaches 63% at τ.
 - **Manual check:** run `npm run dev`, build each World 1 level in the browser, and confirm the animation, the failures and the pass detection. I'll use browser automation to take screenshots of key states.
 - **Real-world check:** the Bench Mission readings for the generic kit (9V/5V, 220–1kΩ resistors, red LEDs, 2N2222/BC547) should match what a multimeter actually shows.
+
+
+Progress is tracked in [GitHub issues](https://github.com/jonashatschek/electronix/issues).

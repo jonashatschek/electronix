@@ -6,6 +6,9 @@ import { Multimeter } from './editor/Multimeter';
 import { Toolbar } from './editor/Toolbar';
 import { useEditor } from './editor/store';
 import { EXAMPLES } from './game/examples';
+import { fmt } from './sim/format';
+import { COMPONENTS, PART_ORDER } from './sim/components';
+import { isDynamic } from './sim/simulate';
 
 function useShortcuts() {
   useEffect(() => {
@@ -30,11 +33,9 @@ function useShortcuts() {
         v: () => st.setMode({ type: 'select' }),
         w: () => st.setMode({ type: 'wire' }),
         m: () => st.setMode({ type: 'probe' }),
-        b: () => st.setMode({ type: 'place', kind: 'battery' }),
-        r: () => st.setMode({ type: 'place', kind: 'resistor' }),
-        l: () => st.setMode({ type: 'place', kind: 'bulb' }),
-        s: () => st.setMode({ type: 'place', kind: 'switch' }),
+        ' ': () => st.setRunning(!st.running),
       };
+      for (const kind of PART_ORDER) actions[COMPONENTS[kind].key] = () => st.setMode({ type: 'place', kind });
       if (actions[k]) {
         e.preventDefault();
         actions[k]();
@@ -45,8 +46,55 @@ function useShortcuts() {
   }, []);
 }
 
+/** Drives the simulation clock once per animation frame. */
+function useClock() {
+  useEffect(() => {
+    let raf = 0;
+    let last = performance.now();
+    const loop = (t: number) => {
+      useEditor.getState().tick((t - last) / 1000);
+      last = t;
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, []);
+}
+
+const SPEEDS = [1, 0.5, 0.25, 0.1];
+
+function ClockControls() {
+  const dynamic = useEditor((s) => isDynamic(s.circuit));
+  const time = useEditor((s) => s.time);
+  const running = useEditor((s) => s.running);
+  const speed = useEditor((s) => s.speed);
+  const setRunning = useEditor((s) => s.setRunning);
+  const setSpeed = useEditor((s) => s.setSpeed);
+  const reset = useEditor((s) => s.resetTime);
+  if (!dynamic) return null;
+  return (
+    <div className="clock" title="Capacitors change over time, so this circuit runs on a simulation clock">
+      <span className="clock-time">⏱ {time < 1 ? fmt(time, 's') : `${time.toFixed(1)} s`}</span>
+      <button onClick={() => setRunning(!running)} title="Space">
+        {running ? '⏸ Pause' : '▶ Play'}
+      </button>
+      <select value={speed} onChange={(e) => setSpeed(Number(e.target.value))} title="Simulation speed">
+        {SPEEDS.map((s) => (
+          <option key={s} value={s}>
+            {s === 1 ? 'Real time' : `${s}× slow-mo`}
+          </option>
+        ))}
+      </select>
+      <button onClick={reset} title="Empty all capacitors and restart the clock">
+        Reset
+      </button>
+    </div>
+  );
+}
+
 export function App() {
   useShortcuts();
+  useClock();
   const undo = useEditor((s) => s.undo);
   const redo = useEditor((s) => s.redo);
   const canUndo = useEditor((s) => s.past.length > 0);
@@ -60,6 +108,7 @@ export function App() {
         <h1>
           <span className="logo">⚡</span> Electronix <small>sandbox</small>
         </h1>
+        <ClockControls />
         <div className="header-actions">
           <select
             value=""
@@ -71,10 +120,16 @@ export function App() {
             <option value="" disabled>
               Load example…
             </option>
-            {EXAMPLES.map((ex, i) => (
-              <option key={ex.name} value={i}>
-                {ex.name}
-              </option>
+            {[...new Set(EXAMPLES.map((e) => e.group))].map((group) => (
+              <optgroup key={group} label={group}>
+                {EXAMPLES.map((ex, i) =>
+                  ex.group === group ? (
+                    <option key={ex.name} value={i}>
+                      {ex.name}
+                    </option>
+                  ) : null,
+                )}
+              </optgroup>
             ))}
           </select>
           <button onClick={undo} disabled={!canUndo} title="Ctrl+Z">

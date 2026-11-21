@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { EXAMPLES, type Example } from '../game/examples';
 import { COMPONENTS } from '../sim/components';
 import { samePoint } from '../sim/geometry';
-import { simulate } from '../sim/simulate';
+import { isDynamic, simulate } from '../sim/simulate';
 import type { Circuit, GridPoint, Part, PartKind, Rotation, SimResult } from '../sim/types';
 
 export type Mode = { type: 'select' } | { type: 'wire' } | { type: 'probe' } | { type: 'place'; kind: PartKind };
@@ -18,6 +18,14 @@ interface EditorState {
   banner: string | null;
   past: Circuit[];
   future: Circuit[];
+  /** Simulation state carried between time steps (capacitor charge, heat, …). */
+  simState: Map<string, number>;
+  /** Simulated seconds since the last reset. */
+  time: number;
+  running: boolean;
+  /** Simulated seconds per real second. */
+  speed: number;
+  dragging: boolean;
 
   /** Apply an edit: simulate, persist burnt parts, push undo history. */
   commit(next: Circuit, before?: Circuit): void;
@@ -39,6 +47,12 @@ interface EditorState {
   clearBoard(): void;
   loadExample(ex: Example): void;
   dismissBanner(): void;
+  /** Advance the simulation clock by `realDt` seconds of wall time (no-op for static circuits). */
+  tick(realDt: number): void;
+  setRunning(running: boolean): void;
+  setSpeed(speed: number): void;
+  /** Discharge all capacitors and restart the clock. */
+  resetTime(): void;
 }
 
 const STORAGE_KEY = 'electronix.circuit.v1';
@@ -60,12 +74,22 @@ function save(c: Circuit) {
   }
 }
 
-/** Simulate and bake any newly burnt parts into the circuit itself (burnt parts stay burnt). */
-function settle(c: Circuit): { circuit: Circuit; sim: SimResult } {
-  const sim = simulate(c);
-  if (!sim.newlyBurnt.length) return { circuit: c, sim };
-  const ids = new Set(sim.newlyBurnt);
-  return { circuit: { ...c, parts: c.parts.map((p) => (ids.has(p.id) ? { ...p, burnt: true } : p)) }, sim };
+/** Longest simulated step; smaller = more accurate. */
+const MAX_STEP = 2e-3;
+
+function markBurnt(c: Circuit, ids: string[]): Circuit {
+  if (!ids.length) return c;
+  const set = new Set(ids);
+  return { ...c, parts: c.parts.map((p) => (set.has(p.id) ? { ...p, burnt: true } : p)) };
+}
+
+/**
+ * Simulate and bake any newly burnt parts into the circuit itself (burnt parts stay burnt).
+ * Circuits with capacitors take a tiny time step so the result reflects their current charge.
+ */
+function settle(c: Circuit, state: Map<string, number>): { circuit: Circuit; sim: SimResult; simState: Map<string, number> } {
+  const sim = isDynamic(c) ? simulate(c, { dt: 1e-4, state }) : simulate(c);
+  return { circuit: markBurnt(c, sim.newlyBurnt), sim, simState: sim.state };
 }
 
 const uid = () => Math.random().toString(36).slice(2, 10);
@@ -78,7 +102,7 @@ function nextLabel(parts: Part[], prefix: string) {
 }
 
 const savedCircuit = loadSaved();
-const initial = settle(savedCircuit ?? EXAMPLES[0].circuit);
+const initial = settle(savedCircuit ?? EXAMPLES[0].circuit, new Map());
 
 export const useEditor = create<EditorState>((set, get) => ({
   ...initial,
@@ -89,21 +113,25 @@ export const useEditor = create<EditorState>((set, get) => ({
   banner: savedCircuit ? null : EXAMPLES[0].intro,
   past: [],
   future: [],
+  time: 0,
+  running: true,
+  speed: 1,
+  dragging: false,
 
   commit(next, before) {
-    const s = settle(next);
+    const s = settle(next, get().simState);
     save(s.circuit);
-    set({ ...s, past: [...get().past, before ?? get().circuit].slice(-100), future: [] });
+    set({ ...s, dragging: false, past: [...get().past, before ?? get().circuit].slice(-100), future: [] });
   },
 
   preview(next) {
-    set({ circuit: next });
+    set({ circuit: next, dragging: true });
   },
 
   undo() {
     const { past, circuit, future } = get();
     if (!past.length) return;
-    const s = settle(past[past.length - 1]);
+    const s = settle(past[past.length - 1], get().simState);
     save(s.circuit);
     set({ ...s, past: past.slice(0, -1), future: [circuit, ...future], selection: null });
   },
@@ -111,7 +139,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   redo() {
     const { past, circuit, future } = get();
     if (!future.length) return;
-    const s = settle(future[0]);
+    const s = settle(future[0], get().simState);
     save(s.circuit);
     set({ ...s, past: [...past, circuit], future: future.slice(1), selection: null });
   },
@@ -201,13 +229,49 @@ export const useEditor = create<EditorState>((set, get) => ({
   },
 
   clearBoard() {
+    set({ simState: new Map(), time: 0 });
     get().commit({ parts: [], wires: [] });
     set({ selection: null, probes: {}, banner: null });
   },
 
   loadExample(ex) {
+    set({ simState: new Map(), time: 0 });
     get().commit(structuredClone(ex.circuit));
     set({ selection: null, probes: {}, banner: ex.intro, mode: { type: 'select' } });
+  },
+
+  tick(realDt) {
+    const { circuit, running, speed, dragging } = get();
+    if (!running || dragging || !isDynamic(circuit)) return;
+    const total = Math.min(realDt, 0.1) * speed;
+    const steps = Math.max(1, Math.ceil(total / MAX_STEP));
+    const dt = total / steps;
+    let state = get().simState;
+    let c = circuit;
+    let sim = get().sim;
+    for (let i = 0; i < steps; i++) {
+      sim = simulate(c, { dt, state });
+      state = sim.state;
+      if (sim.newlyBurnt.length) {
+        c = markBurnt(c, sim.newlyBurnt);
+        save(c);
+        break; // keep the burn notes visible on this frame
+      }
+    }
+    set({ sim, simState: state, circuit: c, time: get().time + total });
+  },
+
+  setRunning(running) {
+    set({ running });
+  },
+
+  setSpeed(speed) {
+    set({ speed });
+  },
+
+  resetTime() {
+    set({ simState: new Map(), time: 0 });
+    set(settle(get().circuit, new Map()));
   },
 
   dismissBanner() {
