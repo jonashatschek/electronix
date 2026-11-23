@@ -12,6 +12,8 @@ A browser game for learning electronics, built on a real circuit simulator. See 
 
 - **QA is mandatory.** After any change to `src/**` (feature, fix or refactor), run the `qa` subagent (`.claude/agents/qa.md`) with the scope of the change before reporting the work as done or committing. It reviews for bugs and writes tests. Fix what it finds (or explain why not), and relay its findings and test results to the user.
 - Every bug fix gets a regression test.
+- **Never commit directly to `main`.** Every change goes on its own branch (`feat/…`, `fix/…`, `test/…`, `chore/…`), is pushed, and gets a pull request. Merging is the user's call unless they say otherwise.
+- PR descriptions summarize the change, link the issues they close (`Closes #N`), and include the QA agent's findings and the `npm test` / `npm run build` results.
 - Commit messages reference issues (`Closes #N`).
 
 ## Conventions
