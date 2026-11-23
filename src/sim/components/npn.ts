@@ -1,6 +1,6 @@
 import { fmt } from '../format';
 import type { Part } from '../types';
-import { safeExp, VT } from './junction';
+import { safeExp, safeExpDeriv, VT } from './junction';
 import { NO_CURRENT, type ComponentDef, type SimCtx } from './types';
 
 const IS = 1e-14;
@@ -22,8 +22,8 @@ interface BjtPoint {
 function bjt(vbe: number, vbc: number): BjtPoint {
   const ef = safeExp(vbe / VT);
   const er = safeExp(vbc / VT);
-  const gf = (IS / VT) * ef;
-  const gr = (IS / VT) * er;
+  const gf = (IS / VT) * safeExpDeriv(vbe / VT);
+  const gr = (IS / VT) * safeExpDeriv(vbc / VT);
   return {
     ic: IS * (ef - er) - (IS / BETA_R) * (er - 1),
     ib: (IS / BETA_F) * (ef - 1) + (IS / BETA_R) * (er - 1),

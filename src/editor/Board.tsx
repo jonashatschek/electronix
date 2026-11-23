@@ -103,6 +103,15 @@ export function Board() {
     else if (st.circuit.parts.find((p) => p.id === d.partId)?.kind === 'switch') st.toggleSwitch(d.partId);
   };
 
+  // A cancelled drag (e.g. the browser took over the gesture): keep any move, never toggle.
+  const onPointerCancel = () => {
+    const d = drag.current;
+    drag.current = null;
+    if (!d) return;
+    const st = useEditor.getState();
+    if (d.moved) st.commit(st.circuit, d.snapshot);
+  };
+
   // Segments for the current-flow animation: every wire and every part (pin0 → pin1).
   const segments = useMemo<Segment[]>(() => {
     const segs: Segment[] = circuit.wires.map((w) => ({
@@ -154,6 +163,7 @@ export function Board() {
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
+      onPointerCancel={onPointerCancel}
       onPointerLeave={() => setHover(null)}
       onContextMenu={(e) => e.preventDefault()}
     >

@@ -30,6 +30,7 @@ function useShortcuts() {
         delete: st.deleteSelection,
         backspace: st.deleteSelection,
         t: st.rotateSelection,
+        f: st.flipSelection,
         v: () => st.setMode({ type: 'select' }),
         w: () => st.setMode({ type: 'wire' }),
         m: () => st.setMode({ type: 'probe' }),

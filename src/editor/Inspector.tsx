@@ -51,7 +51,7 @@ export function Inspector() {
         <dl className="readings">
           <dt>Current</dt>
           <dd>{fmt(Math.abs(r.current), 'A')}</dd>
-          <dt>Voltage (vs. B1 −)</dt>
+          <dt>Voltage (vs. {circuit.parts.find((p) => p.kind === 'battery')?.label.concat(' −') ?? 'reference point'})</dt>
           <dd>{fmt(va, 'V')}</dd>
         </dl>
       </section>

@@ -13,6 +13,8 @@ export function Toolbar() {
   const setMode = useEditor((s) => s.setMode);
   const selection = useEditor((s) => s.selection);
   const rotate = useEditor((s) => s.rotateSelection);
+  const flip = useEditor((s) => s.flipSelection);
+  const canFlip = useEditor((s) => s.selection?.type === 'part' && s.circuit.parts.find((p) => p.id === s.selection?.id)?.kind !== 'npn');
   const del = useEditor((s) => s.deleteSelection);
 
   return (
@@ -45,6 +47,9 @@ export function Toolbar() {
       <h3>Edit</h3>
       <button disabled={selection?.type !== 'part'} onClick={rotate}>
         <span>Rotate</span> <kbd>T</kbd>
+      </button>
+      <button disabled={!canFlip} onClick={flip} title="Turn the part around end-for-end, e.g. to reverse an LED or diode">
+        <span>Flip</span> <kbd>F</kbd>
       </button>
       <button disabled={!selection} onClick={del}>
         <span>Delete</span> <kbd>Del</kbd>

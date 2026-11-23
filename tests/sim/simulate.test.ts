@@ -2,19 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { internalResistance } from '../../src/sim/components/battery';
 import { BULB_OHMS } from '../../src/sim/components/bulb';
 import { simulate } from '../../src/sim/simulate';
-import type { Circuit, Part, PartKind, Rotation, Wire } from '../../src/sim/types';
-
-const part = (id: string, kind: PartKind, x: number, y: number, rot: Rotation, value = 0, extra: Partial<Part> = {}): Part => ({
-  id,
-  kind,
-  label: id,
-  x,
-  y,
-  rot,
-  value,
-  ...extra,
-});
-const wire = (id: string, x1: number, y1: number, x2: number, y2: number): Wire => ({ id, a: { x: x1, y: y1 }, b: { x: x2, y: y2 } });
+import type { Circuit, Part, Wire } from '../../src/sim/types';
+import { amps, part, wire } from '../helpers';
 
 /** Battery (+ at top-left (0,0), − at (0,3)) wired to a load from (6,0) to (6,3). */
 function loop(volts: number, load: Part, extraWires: Wire[] = [], extraParts: Part[] = []): Circuit {
@@ -23,8 +12,6 @@ function loop(volts: number, load: Part, extraWires: Wire[] = [], extraParts: Pa
     wires: [wire('w1', 0, 0, 6, 0), wire('w2', 6, 3, 0, 3), ...extraWires],
   };
 }
-
-const amps = (r: ReturnType<typeof simulate>, id: string) => Math.abs(r.readings.get(id)!.current);
 
 describe('simulate', () => {
   it("Ohm's law: 9 V across 1 kΩ ≈ 9 mA", () => {

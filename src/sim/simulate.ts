@@ -23,7 +23,6 @@ interface Topology {
   n: number;
   elements: Element[];
   degree: Map<string, number>;
-  hasBattery: boolean;
 }
 
 /** Every distinct grid point used by a pin or wire end becomes a circuit node. */
@@ -38,7 +37,9 @@ export function buildTopology(c: Circuit): Topology {
   }
 
   const firstBattery = c.parts.find((p) => p.kind === 'battery');
-  const groundKey = firstBattery ? pointKey(partPins(firstBattery)[1]) : null;
+  // Ground (0 V) = the first battery's − terminal. With no battery, any node will do:
+  // a charged capacitor can still drive the circuit.
+  const groundKey = firstBattery ? pointKey(partPins(firstBattery)[1]) : (degree.keys().next().value ?? null);
   const nodeOf = new Map<string, number>();
   const keys: string[] = [];
   for (const k of degree.keys()) {
@@ -53,7 +54,7 @@ export function buildTopology(c: Circuit): Topology {
     ...wires.map((w) => ({ id: w.id, nodes: [nodeOf.get(pointKey(w.a))!, nodeOf.get(pointKey(w.b))!] })),
     ...c.parts.map((p) => ({ id: p.id, nodes: partPins(p).map((pt) => nodeOf.get(pointKey(pt))!), part: p })),
   ];
-  return { nodeOf, keys, n: keys.length, elements, degree, hasBattery: !!firstBattery };
+  return { nodeOf, keys, n: keys.length, elements, degree };
 }
 
 function effective(part: Part, burnt: Set<string>): Part {
@@ -144,7 +145,7 @@ function newton(
  */
 function solve(topo: Topology, burnt: Set<string>, ctx: SimCtx & { limited: boolean }): { v: Float64Array; converged: boolean } {
   const n = topo.n;
-  if (!topo.hasBattery) return { v: new Float64Array(n), converged: true };
+  if (n === 0) return { v: new Float64Array(0), converged: true };
   // Warm start from the previous time step's node voltages.
   const start = Float64Array.from(topo.keys, (k) => ctx.prev.get(`n:${k}`) ?? 0);
   const first = newton(topo, burnt, ctx, start);
@@ -250,11 +251,10 @@ export function simulate(circuit: Circuit, opts: SimOptions = {}): SimResult {
 
   // Carry solver state forward: node voltages (warm start) and junction voltages.
   const state = ctx.next;
-  if (!converged) {
-    // Don't let garbage from a failed solve heat anything up: keep last step's averages.
-    for (const [k, val] of prev) if (k.startsWith('s:')) state.set(k, val);
-  }
-  topo.keys.forEach((k, i) => state.set(`n:${k}`, v[i]));
+  if (converged) topo.keys.forEach((k, i) => state.set(`n:${k}`, v[i]));
+  // A failed solve must not leak into the next step (heat, capacitor charge, warm start):
+  // carry the previous state forward unchanged instead.
+  const nextState = converged ? state : new Map(prev);
 
   const readings = new Map<string, ElementReading>();
   for (const w of circuit.wires) {
@@ -292,7 +292,7 @@ export function simulate(circuit: Circuit, opts: SimOptions = {}): SimResult {
   const notes = [...burnNotes, ...circuitNotes(circuit, readings, evals, burnt, newlyBurnt, topo.degree)];
   notes.sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity]);
 
-  return { nodeVoltage, pointDegree: topo.degree, readings, notes, newlyBurnt, state };
+  return { nodeVoltage, pointDegree: topo.degree, readings, notes, newlyBurnt, state: nextState };
 }
 
 /** True when the circuit contains parts that change over time (needs the clock running). */
@@ -323,19 +323,50 @@ function circuitNotes(
     }
   }
 
+  const chargedCap = c.parts.find((p) => p.kind === 'capacitor' && !p.burnt && Math.abs(readings.get(p.id)!.voltage) > 0.1);
   const batteries = c.parts.filter((p) => p.kind === 'battery');
   if (!batteries.length) {
-    notes.push({ severity: 'info', title: 'No power source', text: 'Nothing happens without a battery pushing current around. Add one (B).' });
+    notes.push(
+      chargedCap
+        ? {
+            severity: 'info',
+            partId: chargedCap.id,
+            title: 'Running on stored charge',
+            text: `There's no battery, but ${chargedCap.label} is charged and can push current until it's empty, like a tiny battery that runs down.`,
+          }
+        : { severity: 'info', title: 'No power source', text: 'Nothing happens without a battery pushing current around. Add one (B).' },
+    );
     return notes;
   }
 
   const delivering = batteries.filter((b) => -readings.get(b.id)!.current > NO_CURRENT);
   if (!delivering.length) {
-    const openSwitch = c.parts.find((p) => p.kind === 'switch' && !p.closed);
+    // The open switch actually blocking the loop is the one the battery pushes hardest against.
+    const openSwitch = c.parts
+      .filter((p) => p.kind === 'switch' && !p.closed)
+      .sort((a, b) => Math.abs(readings.get(b.id)!.voltage) - Math.abs(readings.get(a.id)!.voltage))[0];
     const dangling = c.parts.flatMap((p) => partPins(p)).filter((pt) => degree.get(pointKey(pt)) === 1).length;
-    const hasCap = c.parts.some((p) => p.kind === 'capacitor' && !p.burnt);
+    const caps = c.parts.filter((p) => p.kind === 'capacitor' && !p.burnt);
+    const discharging = caps.find((p) => Math.abs(readings.get(p.id)!.current) > NO_CURRENT);
+    const maxEmf = Math.max(...batteries.map((b) => b.value));
+    const full = caps.find((p) => Math.abs(readings.get(p.id)!.voltage) > 0.95 * maxEmf);
     if (newlyBurnt.length) {
       // the burn note already explains it
+    } else if (discharging) {
+      notes.push({
+        severity: 'info',
+        partId: discharging.id,
+        title: `${discharging.label} is discharging`,
+        text: `The battery isn't delivering any current right now, so everything that still runs is powered by the charge stored in ${discharging.label}. As it drains, its voltage and current fade away.`,
+      });
+    } else if (full && !dangling) {
+      // Checked before open switches: an unrelated open switch elsewhere isn't the reason.
+      notes.push({
+        severity: 'info',
+        partId: full.id,
+        title: 'Battery current has stopped',
+        text: `${full.label} is fully charged, so no more current flows from the battery. A capacitor blocks steady DC: current only flows while its voltage is changing.`,
+      });
     } else if (openSwitch) {
       notes.push({
         severity: 'warn',
@@ -345,12 +376,6 @@ function circuitNotes(
       });
     } else if (burnt.size) {
       notes.push({ severity: 'warn', title: 'A burnt part breaks the loop', text: 'Burnt parts are open gaps. Replace them or route around them.' });
-    } else if (hasCap && !dangling) {
-      notes.push({
-        severity: 'info',
-        title: 'Battery current has stopped',
-        text: 'Any capacitor in the loop is now fully charged, so no more current flows from the battery. A capacitor blocks steady DC: current only flows while its voltage is changing.',
-      });
     } else {
       notes.push({
         severity: 'warn',

@@ -1,33 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { EXAMPLES } from '../../src/game/examples';
+import { close, example, part, run, setOpen, wire } from '../helpers';
 import { simulate } from '../../src/sim/simulate';
-import type { Circuit, Part, PartKind, Rotation, SimResult, Wire } from '../../src/sim/types';
-
-const part = (id: string, kind: PartKind, x: number, y: number, rot: Rotation, value = 0, extra: Partial<Part> = {}): Part => ({
-  id,
-  kind,
-  label: id,
-  x,
-  y,
-  rot,
-  value,
-  ...extra,
-});
-const wire = (id: string, x1: number, y1: number, x2: number, y2: number): Wire => ({ id, a: { x: x1, y: y1 }, b: { x: x2, y: y2 } });
-
-const example = (name: string) => structuredClone(EXAMPLES.find((e) => e.name === name)!.circuit);
-const close = (c: Circuit, ...ids: string[]): Circuit => ({ ...c, parts: c.parts.map((p) => (ids.includes(p.id) ? { ...p, closed: true } : p)) });
-const setOpen = (c: Circuit, ...ids: string[]): Circuit => ({ ...c, parts: c.parts.map((p) => (ids.includes(p.id) ? { ...p, closed: false } : p)) });
-
-/** Run the transient simulation; returns the final result and calls onStep each step. */
-function run(c: Circuit, seconds: number, dt = 2e-3, state?: Map<string, number>, onStep?: (r: SimResult, t: number) => void) {
-  let r = simulate(c, { dt, state });
-  for (let t = dt; t < seconds; t += dt) {
-    r = simulate(c, { dt, state: r.state });
-    onStep?.(r, t);
-  }
-  return r;
-}
+import type { Circuit } from '../../src/sim/types';
 
 describe('LED & diode', () => {
   it('an LED with 470 Ω on 9 V draws ~15 mA and is lit', () => {

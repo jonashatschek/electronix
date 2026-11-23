@@ -78,7 +78,7 @@ export const led: ComponentDef = {
             severity: 'info',
             partId: part.id,
             title: `${part.label} is backwards`,
-            text: 'The battery is pushing current the wrong way, from cathode to anode, so the LED blocks it. Rotate it 180° (press T twice) so + faces the battery\'s + side.',
+            text: 'The battery is pushing current the wrong way, from cathode to anode, so the LED blocks it. Select it and press F to flip it, so + faces the battery\'s + side.',
           },
         ],
       };

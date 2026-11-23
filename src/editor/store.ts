@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { EXAMPLES, type Example } from '../game/examples';
 import { COMPONENTS } from '../sim/components';
 import { samePoint } from '../sim/geometry';
+import { partPins } from '../sim/pins';
 import { isDynamic, simulate } from '../sim/simulate';
 import type { Circuit, GridPoint, Part, PartKind, Rotation, SimResult } from '../sim/types';
 
@@ -41,6 +42,8 @@ interface EditorState {
   probeClick(pt: GridPoint): void;
   deleteSelection(): void;
   rotateSelection(): void;
+  /** Turn a two-pin part around end-for-end, keeping it in the same spot (swaps its pins). */
+  flipSelection(): void;
   toggleSwitch(id: string): void;
   setValue(id: string, value: number): void;
   replacePart(id: string): void;
@@ -85,11 +88,13 @@ function markBurnt(c: Circuit, ids: string[]): Circuit {
 
 /**
  * Simulate and bake any newly burnt parts into the circuit itself (burnt parts stay burnt).
- * Circuits with capacitors take a tiny time step so the result reflects their current charge.
+ * Circuits with capacitors take a tiny time step so the result reflects their current charge,
+ * but that step is only for display: the clock state isn't advanced (editing while paused
+ * must not change any capacitor).
  */
 function settle(c: Circuit, state: Map<string, number>): { circuit: Circuit; sim: SimResult; simState: Map<string, number> } {
   const sim = isDynamic(c) ? simulate(c, { dt: 1e-4, state }) : simulate(c);
-  return { circuit: markBurnt(c, sim.newlyBurnt), sim, simState: sim.state };
+  return { circuit: markBurnt(c, sim.newlyBurnt), sim, simState: state };
 }
 
 const uid = () => Math.random().toString(36).slice(2, 10);
@@ -213,6 +218,18 @@ export const useEditor = create<EditorState>((set, get) => ({
     });
   },
 
+  flipSelection() {
+    const { selection, circuit } = get();
+    if (selection?.type !== 'part') return;
+    const part = circuit.parts.find((p) => p.id === selection.id);
+    if (!part || partPins(part).length !== 2) return;
+    const end = partPins(part)[1];
+    get().commit({
+      ...circuit,
+      parts: circuit.parts.map((p) => (p.id === part.id ? { ...p, x: end.x, y: end.y, rot: ((p.rot + 2) % 4) as Rotation } : p)),
+    });
+  },
+
   toggleSwitch(id) {
     const { circuit } = get();
     get().commit({ ...circuit, parts: circuit.parts.map((p) => (p.id === id ? { ...p, closed: !p.closed } : p)) });
@@ -249,16 +266,19 @@ export const useEditor = create<EditorState>((set, get) => ({
     let state = get().simState;
     let c = circuit;
     let sim = get().sim;
+    let done = 0;
     for (let i = 0; i < steps; i++) {
       sim = simulate(c, { dt, state });
       state = sim.state;
+      done++;
       if (sim.newlyBurnt.length) {
         c = markBurnt(c, sim.newlyBurnt);
         save(c);
         break; // keep the burn notes visible on this frame
       }
     }
-    set({ sim, simState: state, circuit: c, time: get().time + total });
+    // Only count the time that was actually simulated.
+    set({ sim, simState: state, circuit: c, time: get().time + done * dt });
   },
 
   setRunning(running) {

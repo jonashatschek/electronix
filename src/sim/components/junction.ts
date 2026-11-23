@@ -10,6 +10,11 @@ export function safeExp(x: number): number {
   return e80 * (1 + x - 80);
 }
 
+/** Derivative of safeExp (constant slope e^80 past the knee). */
+export function safeExpDeriv(x: number): number {
+  return x < 80 ? Math.exp(x) : Math.exp(80);
+}
+
 /** SPICE junction limiting: stops Newton from jumping to absurd forward voltages. */
 export function pnjlim(vNew: number, vOld: number, vt: number, is: number): number {
   const vcrit = vt * Math.log(vt / (Math.SQRT2 * is));
@@ -31,6 +36,6 @@ export function diodeCompanion(key: string, vab: number, is: number, n: number, 
   const vd = ctx.junction(key, vab, nvt, is);
   const e = safeExp(vd / nvt);
   const id = is * (e - 1);
-  const gd = (is / nvt) * e + 1e-12;
+  const gd = (is / nvt) * safeExpDeriv(vd / nvt) + 1e-12;
   return { G: gd, J: gd * vd - id };
 }

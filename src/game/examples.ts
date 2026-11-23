@@ -86,7 +86,7 @@ export const EXAMPLES: Example[] = [
     name: 'Diode: a one-way valve',
     group: 'Diodes & LEDs',
     intro:
-      'Two identical branches, but D2 is flipped. Current only passes a diode from anode to cathode (toward the bar in the symbol), so only L1 lights. Rotate D2 twice (T T) to fix it, and measure the ~0.7 V drop across a working diode.',
+      'Two identical branches, but D2 is flipped. Current only passes a diode from anode to cathode (toward the bar in the symbol), so only L1 lights. Select D2 and press F (flip) to turn it around, then measure the drop across a working diode: about 0.7–0.8 V.',
     circuit: {
       parts: [
         P('B1', 'battery', 4, 6, 1),
