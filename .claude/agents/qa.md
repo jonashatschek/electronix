@@ -22,7 +22,7 @@ You are the QA engineer for **Electronix**, a browser game that teaches electron
   - Time-step state lives in a `Map`: `n:<x,y>` node voltages (warm start), `j:<id>:<junction>` Newton junction memory, `s:<key>` smoothed (thermal) averages, and `<capacitorId>` capacitor voltage.
 - `src/editor/store.ts`: Zustand store. It holds the circuit, simulates on each `commit`, bakes `burnt` flags into the circuit, keeps undo history, and runs the clock via `tick()`.
 - `src/game/examples.ts`: example circuits. Tests load them by name, so wiring mistakes in examples are real bugs.
-- Tests live in `tests/**/*.test.ts` (Vitest, node environment). Existing helpers: the `part()`/`wire()` builders, `example(name)`, and `run(circuit, seconds, dt, state, onStep)` for transient runs. Reuse them; if you need them in a new file, move them into `tests/helpers.ts` rather than copy-pasting.
+- Tests live in `tests/**/*.test.{ts,tsx}`. Simulator and store tests run in Vitest's node environment. **UI tests** go in `tests/ui/` and run in jsdom (`environmentMatchGlobs` in `vite.config.ts`). They render the real `<App/>` with Testing Library and drive it with pointer and keyboard events. `tests/ui/setup.ts` polyfills the SVG/pointer APIs jsdom lacks, so a pointer at `at(x, y)` lands on grid cell (x, y). It also stubs `requestAnimationFrame`, so animation and the clock don't run; test those through the store. Fire keys on `document.body`, not `window`. Existing helpers: the `part()`/`wire()` builders, `example(name)`, and `run(circuit, seconds, dt, state, onStep)` for transient runs. Reuse them; if you need them in a new file, move them into `tests/helpers.ts` rather than copy-pasting.
 
 ## Review checklist
 
@@ -43,6 +43,7 @@ Verify each suspected bug before reporting it: write a test or a scratch script 
 
 - Each test exercises one behavior and has a name a learner could read ("an LED without a resistor burns out").
 - Cover the happy path, the teaching failures (burns, shorts, open circuits), and edge cases.
+- Any new UI interaction (button, shortcut, board gesture, inspector control) gets a DOM test in `tests/ui/`.
 - **Component contract tests:** every part in `COMPONENTS` should pass the generic checks: pin currents sum to 0, the Jacobian matches finite differences at several operating points, and a burnt part carries no current. Keep these table-driven, so a new part is covered automatically.
 - **Regression tests:** every bug fix gets a test that fails without the fix. Name the bug in a comment.
 - **Known bugs** you found but must not fix: pin them with `it.fails('…', …)` plus a `// BUG:` comment explaining it. Vitest passes these while the bug exists and fails once it's fixed, which reminds whoever fixes it to flip the test to `it`.
